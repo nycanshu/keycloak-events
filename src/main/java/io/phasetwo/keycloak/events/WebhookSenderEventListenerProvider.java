@@ -1,5 +1,6 @@
 package io.phasetwo.keycloak.events;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.google.common.base.Strings;
 import io.phasetwo.keycloak.model.KeycloakEventType;
 import io.phasetwo.keycloak.model.WebhookEventModel;
@@ -10,6 +11,7 @@ import io.phasetwo.keycloak.representation.ExtendedAdminEvent;
 import io.phasetwo.keycloak.representation.ExtendedAuthDetails;
 import java.io.IOException;
 import java.util.Date;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
@@ -296,6 +298,58 @@ public class WebhookSenderEventListenerProvider extends HttpSenderEventListenerP
         extendedAdminEvent.getDetails().put("userId", userId);
         if (user != null) {
           extendedAdminEvent.getDetails().put("username", user.getUsername());
+        }
+      }
+    }
+
+    // add organization details if resource is an organization
+    if (resourcePath != null && resourcePath.startsWith("organizations/")) {
+      // parse orgId from resourcePath
+      String orgPattern =
+          "^organizations/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$";
+      Pattern orgRegex = Pattern.compile(orgPattern);
+      Matcher orgMatcher = orgRegex.matcher(resourcePath);
+      if (orgMatcher.matches()) {
+        String orgId = orgMatcher.group(1);
+        extendedAdminEvent.getDetails().put("orgId", orgId);
+
+        // parse representation JSON to extract organization details
+        String representation = adminEvent.getRepresentation();
+        if (representation != null && !representation.isEmpty()) {
+          try {
+            Map<String, Object> orgData =
+                JsonSerialization.readValue(
+                    representation, new TypeReference<Map<String, Object>>() {});
+            
+            // Extract organization name
+            if (orgData.containsKey("name")) {
+              extendedAdminEvent.getDetails().put("orgName", String.valueOf(orgData.get("name")));
+            }
+            
+            // Extract organization alias
+            if (orgData.containsKey("alias")) {
+              extendedAdminEvent.getDetails().put("orgAlias", String.valueOf(orgData.get("alias")));
+            }
+            
+            // Extract organization domain (first domain if multiple)
+            if (orgData.containsKey("domains")) {
+              Object domainsObj = orgData.get("domains");
+              if (domainsObj instanceof java.util.List && !((java.util.List<?>) domainsObj).isEmpty()) {
+                Object firstDomain = ((java.util.List<?>) domainsObj).get(0);
+                if (firstDomain instanceof Map) {
+                  Map<?, ?> domainMap = (Map<?, ?>) firstDomain;
+                  if (domainMap.containsKey("name")) {
+                    extendedAdminEvent
+                        .getDetails()
+                        .put("orgDomain", String.valueOf(domainMap.get("name")));
+                  }
+                }
+              }
+            }
+          } catch (Exception e) {
+            log.warnf(
+                "Failed to parse organization representation for orgId %s: %s", orgId, e.getMessage());
+          }
         }
       }
     }
